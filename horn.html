@@ -1,0 +1,522 @@
+<meta charset="utf-8">
+<title>Gabriel's Horn</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Gaegu:wght@400;700&display=swap">
+<style>
+  /* One square storybook plate on paper: the whole piece is a single canvas so it records as-is. */
+  :root {
+    --paper: #fbf5e6;
+    --label: #48545c; /* Blue Grey B47 */
+    --hand: "Gaegu", "Comic Sans MS", "Chalkboard SE", cursive;
+    color-scheme: light;
+  }
+  html, body { background: var(--paper); color: var(--label); }
+  body {
+    margin: 0;
+    min-height: 100%;
+    font-family: var(--hand);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding-block: 24px 40px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    gap: 14px;
+  }
+  canvas {
+    width: min(100%, 760px);
+    aspect-ratio: 1200 / 1000;
+    max-width: 100%;
+    display: block;
+    touch-action: manipulation;
+  }
+  .controls { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+  .controls button {
+    font: 700 18px/1 var(--hand);
+    color: var(--label);
+    background: transparent;
+    border: 1.5px solid var(--label);
+    border-radius: 10px;
+    padding: 8px 14px;
+    cursor: pointer;
+  }
+  .controls button:focus-visible { outline: 2px solid #0846a9; outline-offset: 2px; }
+  .sr {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip: rect(0 0 0 0); white-space: nowrap;
+  }
+  .sr:focus { position: static; width: auto; height: auto; clip: auto; }
+</style>
+
+<canvas id="plate" width="1200" height="1000" role="img"
+  aria-label="Gabriel's horn drawn in letters on a pair of axes. The curve y = 1/x is written as the fractions 1, one half, one third and so on, then spins around the x-axis into a horn whose letters thin out from HORN to dots. Header: volume = pi, surface = infinity."></canvas>
+
+<div class="controls">
+  <button class="sr" id="btn-volume" type="button">Pour paint in (volume = π)</button>
+  <button class="sr" id="btn-surface" type="button">Paint the outside (surface = ∞)</button>
+  <button id="btn-record" type="button" hidden>Record one loop</button>
+</div>
+
+<script src="palette.js"></script>
+<script>
+const M = window.MARKERS;
+const PAPER = "#fbf5e6";
+const LABEL = M["Blue Grey B47"];
+const BLUES = [M["POSCA Indigo"], M["Dark Blue Light 15"], M["POSCA Blue"], M["Frost Blue 182"]];
+const CORALS = [M["POSCA Tomato Red"], M["Warm Coral 208"], M["Peach 18"]];
+const CURVE = M["Warm Coral 208"];
+const FONT = '"Gaegu", "Comic Sans MS", "Chalkboard SE", cursive';
+
+const cv = document.getElementById("plate");
+const g = cv.getContext("2d");
+const S = 1200, H = 1000;
+
+// ASCII grid for the horn
+const CW = 12, CH = 22, GX = 60, GY = 0, COLS = 90, ROWS = 45;
+const UNIT = 200, CX = 600, CY = 630, XC = 2.65, PITCH = 0;
+const LOOP = 10, BEAT = 2.5, SPIN = 2.4;
+
+// The curve is written in its own values: 1/n for n = 1, 2, 3, ...
+const FRACS = "1 ½ ⅓ ¼ ⅕ ⅙ ⅐ ⅛ ⅑ ⅒ 1/11 1/12 1/13 1/14 1/15 1/16 1/17 1/18 1/19 1/20 1/21 1/22 1/23 1/24 1/25 ";
+
+// Each stretch of the horn spells less of itself
+const ZONES = [
+  { upTo: 2.2, horn: "HORN ", paint: "PAINT " },
+  { upTo: 3.8, horn: "horn ", paint: "paint " },
+  { upTo: 5.2, horn: "h o r n   ", paint: "p a i n t   " },
+  { upTo: 1e9, horn: ". ", paint: ". " },
+];
+
+const ease = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+// Paper: cream with fine grain, faint fibers and soft mottling, made once
+const paper = (() => {
+  const c = document.createElement("canvas");
+  c.width = c.height = S;
+  const p = c.getContext("2d");
+  p.fillStyle = PAPER;
+  p.fillRect(0, 0, S, S);
+  const img = p.getImageData(0, 0, S, S), d = img.data;
+  let seed = 7;
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const blot = [];
+  for (let i = 0; i < 40; i++) blot.push([rnd() * S, rnd() * S, 80 + rnd() * 220, rnd() < 0.5 ? -1 : 1]);
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      let n = (rnd() - 0.5) * 12;
+      for (const [bx, by, br, s] of blot) {
+        const q = ((x - bx) ** 2 + (y - by) ** 2) / (br * br);
+        if (q < 1) n += s * 4 * (1 - q);
+      }
+      const i = (x + y * S) * 4;
+      d[i] += n; d[i + 1] += n; d[i + 2] += n * 1.1;
+    }
+  }
+  p.putImageData(img, 0, 0);
+  p.lineCap = "round";
+  for (let i = 0; i < 2200; i++) {
+    const x = rnd() * S, y = rnd() * S, a = rnd() * Math.PI, l = 4 + rnd() * 14;
+    p.strokeStyle = rnd() < 0.6 ? "rgba(120,100,70,0.1)" : "rgba(255,255,255,0.5)";
+    p.lineWidth = 0.6 + rnd() * 0.8;
+    p.beginPath();
+    p.moveTo(x, y);
+    p.quadraticCurveTo(x + Math.cos(a) * l * 0.5 + (rnd() - 0.5) * 3, y + Math.sin(a) * l * 0.5 + (rnd() - 0.5) * 3, x + Math.cos(a) * l, y + Math.sin(a) * l);
+    p.stroke();
+  }
+  return c;
+})();
+
+function view(ph) {
+  const yaw = 0.28 + 0.06 * Math.sin(2 * Math.PI * ph);
+  return { cy: Math.cos(yaw), sy: Math.sin(yaw), cp: Math.cos(PITCH), sp: Math.sin(PITCH) };
+}
+
+function project(v, X, Y, Z) {
+  X -= XC;
+  const x1 = X * v.cy + Z * v.sy, z1 = -X * v.sy + Z * v.cy;
+  const y2 = Y * v.cp - z1 * v.sp, z2 = Y * v.sp + z1 * v.cp;
+  return [CX + x1 * UNIT, CY - y2 * UNIT, z2];
+}
+
+function rotN(v, X, Y, Z) {
+  const x1 = X * v.cy + Z * v.sy, z1 = -X * v.sy + Z * v.cy;
+  return [x1, Y * v.cp - z1 * v.sp, Y * v.sp + z1 * v.cp];
+}
+
+const LIGHT = (() => { const l = [-0.45, 0.7, 0.55], n = Math.hypot(...l); return l.map(c => c / n); })();
+
+// Timeline of the base loop, in seconds
+function timeline(t) {
+  if (t < 1.6) return { curve: t / 1.6, sweep: 0 };
+  if (t < 4.6) return { curve: 1, sweep: ease((t - 1.6) / 3) * 2 * Math.PI };
+  if (t < 8.6) return { curve: 1, sweep: 2 * Math.PI };
+  if (t < 9.6) return { curve: 1, sweep: (1 - ease(t - 8.6)) * 2 * Math.PI };
+  return { curve: 1 - (t - 9.6) / 0.4, sweep: 0 };
+}
+
+const N = COLS * ROWS;
+const depth = new Float32Array(N), shade = new Float32Array(N), wx = new Float32Array(N);
+const inside = new Uint8Array(N), cap = new Uint8Array(N);
+
+function cellAt(px, py) {
+  const c = Math.floor((px - GX) / CW), r = Math.floor((py - GY) / CH);
+  return c < 0 || c >= COLS || r < 0 || r >= ROWS ? -1 : c + r * COLS;
+}
+
+function splat(px, py, z, k, x, isInside, isCap) {
+  const i = cellAt(px, py);
+  if (i < 0 || z <= depth[i]) return;
+  depth[i] = z; shade[i] = k; wx[i] = x; inside[i] = isInside; cap[i] = isCap;
+}
+
+// Past x = 3.8 the drawn radius tapers to a point where the plate ends, right on the axis arrow.
+// Artistic license: the real horn never closes, it just keeps thinning.
+const TAPER_FROM = 3.8;
+function tipX(v) { return XC + (GX + COLS * CW - CX) / (UNIT * v.cy) - 0.04; }
+function drawnR(v, x) {
+  const xe = tipX(v);
+  if (x < TAPER_FROM) return 1 / x;
+  return (1 / x) * Math.max(0, 1 - ((x - TAPER_FROM) / (xe - TAPER_FROM)) ** 1.4);
+}
+
+function buildSurface(v, sweep, withCap) {
+  depth.fill(-1e9);
+  if (sweep <= 0.001) return;
+  const xe = tipX(v);
+  for (let x = 1; x < xe; x += 0.025) {
+    const r = drawnR(v, x);
+    const dth = Math.min(0.08, 3.2 / (r * UNIT));
+    const nl = Math.hypot(1 / (x * x), 1);
+    for (let th = 0; th <= sweep; th += dth) {
+      const ct = Math.cos(th), st = Math.sin(th);
+      const [px, py, z] = project(v, x, r * ct, r * st);
+      const n = rotN(v, (1 / (x * x)) / nl, ct / nl, st / nl);
+      let k = n[0] * LIGHT[0] + n[1] * LIGHT[1] + n[2] * LIGHT[2];
+      const back = n[2] < 0;
+      if (back) k = -k;
+      splat(px, py, z, k, x, back ? 1 : 0, 0);
+    }
+  }
+  if (withCap) {
+    for (let rho = 0; rho <= 1; rho += 0.03) {
+      for (let th = 0; th < 2 * Math.PI; th += 0.03) {
+        const [px, py, z] = project(v, 1, rho * Math.cos(th), rho * Math.sin(th));
+        splat(px, py, z + 0.001, 0.6, 1, 0, 1);
+      }
+    }
+  }
+}
+
+// Cells drawn on top of the horn: the axes, then the coral curve
+function overlays(v, tl) {
+  const over = new Map();
+  let last = -1;
+  for (let x = -0.4; x < 14; x += 0.01) {
+    const [px, py] = project(v, x, 0, 0);
+    const i = cellAt(px, py);
+    if (i >= 0 && i !== last) { over.set(i, { ch: "-", color: LABEL }); last = i; }
+  }
+  if (last >= 0) over.set(last, { ch: ">", color: LABEL });
+  last = -1;
+  for (let y = -1.4; y <= 3.05; y += 0.01) {
+    const [px, py] = project(v, 0, y, 0);
+    const i = cellAt(px, py);
+    if (i >= 0 && i !== last) { over.set(i, { ch: "|", color: LABEL }); last = i; }
+  }
+  if (last >= 0) over.set(last, { ch: "^", color: LABEL });
+  for (let n = 1; n <= 6; n++) {
+    const i = cellAt(...project(v, n, 0, 0));
+    if (i < 0) continue;
+    over.set(i, { ch: "+", color: LABEL });
+    const below = i + COLS;
+    if (below < N) {
+      over.set(below - 1, { ch: "" });
+      over.set(below, { ch: String(n), color: LABEL });
+      over.set(below + 1, { ch: "" });
+    }
+  }
+  for (const y of [-1, 1]) {
+    const i = cellAt(...project(v, 0, y, 0));
+    if (i >= 0) over.set(i, { ch: "+", color: LABEL });
+  }
+
+  // The curve rides the leading edge of the sweep, then rests on top as the graph of y = 1/x
+  if (tl.curve > 0) {
+    const th = tl.sweep >= 2 * Math.PI - 0.001 ? 0 : tl.sweep;
+    const cells = [];
+    last = -1;
+    for (let x = 1; x < tipX(v); x += 0.004) {
+      const r = drawnR(v, x);
+      const i = cellAt(...project(v, x, r * Math.cos(th), r * Math.sin(th)));
+      if (i >= 0 && i !== last) { cells.push(i); last = i; }
+    }
+    const shown = Math.floor(cells.length * Math.min(1, tl.curve));
+    for (let n = 0; n < shown; n++) {
+      const ch = n < FRACS.length ? FRACS[n] : (n % 2 ? "" : ".");
+      over.set(cells[n], ch === " " ? { ch: "", color: CURVE } : { ch, color: CURVE, bold: true });
+    }
+  }
+  return over;
+}
+
+function zoneIndex(x) { return ZONES.findIndex(z => x < z.upTo); }
+
+// Header: two centered lines with a gentle heartbeat, lub then dub, every 2.5 s
+const HEAD = [
+  { text: "volume = π", baseY: 138, spread: -34, family: "blue", offset: 0 },
+  { text: "surface = ∞", baseY: 236, spread: 44, family: "coral", offset: 0.18 },
+];
+const HEAD_SIZE = 84;
+
+function beat(t) {
+  const u = ((t % BEAT) + BEAT) % BEAT;
+  const bump = (c, w) => {
+    const dd = Math.min(Math.abs(u - c), BEAT - Math.abs(u - c));
+    return Math.exp(-((dd / w) ** 2));
+  };
+  return bump(0.15, 0.09) + 0.6 * bump(0.45, 0.09);
+}
+
+function headColor(family, a) {
+  const lvl = a > 0.85 ? 2 : a > 0.45 ? 1 : 0;
+  if (family === "blue") return BLUES[lvl];
+  return [CORALS[1], CORALS[0], CORALS[2]][lvl];
+}
+
+function lineMetrics(text) {
+  const chars = [...text];
+  const widths = chars.map(ch => g.measureText(ch).width);
+  const total = widths.reduce((a, b) => a + b, 0);
+  return { chars, widths, total, x0: S / 2 - total / 2 };
+}
+
+function drawHeader(t, now) {
+  g.textBaseline = "alphabetic";
+  g.textAlign = "left";
+  g.font = `700 ${HEAD_SIZE}px ${FONT}`;
+  HEAD.forEach(line => {
+    const active = mode === (line.family === "blue" ? "volume" : "surface");
+    const since = (now - modeStart) / 1000;
+    const kick = active && since < 1.2 ? beat(since * 1.6 + 0.15 * 0) * 1.4 : 0;
+    const m = lineMetrics(line.text);
+    line.y = line.baseY + line.spread * gap;
+    line.box = [m.x0 - 14, line.y - HEAD_SIZE * 0.8, m.total + 28, HEAD_SIZE];
+    let x = m.x0;
+    m.chars.forEach((ch, i) => {
+      const a = Math.max(beat(t - line.offset - i * 0.012), kick);
+      const s = 1 + 0.035 * a;
+      g.save();
+      g.translate(x + m.widths[i] / 2, line.y - HEAD_SIZE * 0.3);
+      g.scale(s, s);
+      g.fillStyle = headColor(line.family, a);
+      g.fillText(ch, -m.widths[i] / 2, HEAD_SIZE * 0.3);
+      g.restore();
+      x += m.widths[i];
+    });
+  });
+}
+
+function hitHeader(px, py) {
+  for (const line of HEAD) {
+    if (!line.box) continue;
+    const [x, y, w, h] = line.box;
+    if (px >= x && px <= x + w && py >= y && py <= y + h) return line.family === "blue" ? "volume" : "surface";
+  }
+  return null;
+}
+
+let mode = null, modeStart = 0, loopStart = performance.now(), recording = false;
+let gap = 0, lastNow = performance.now(), popKey = "", popStart = 0;
+
+// Overshoot so the middle text pops in
+const popScale = u => { const c = 1.9; u = Math.min(1, u); return 1 + (c + 1) * (u - 1) ** 3 + c * (u - 1) ** 2; };
+
+function setMode(m) {
+  const now = performance.now();
+  mode = mode === m ? null : m;
+  modeStart = now;
+  if (!mode) loopStart = now - 5000; // come back in at the finished horn
+}
+
+function frame(now) {
+  let t = ((now - loopStart) / 1000) % LOOP;
+  if (reduced && !recording) t = 6;
+  const ph = t / LOOP;
+  // A tap replays the spin from the bare curve, then the fill or paint starts
+  const spin = reduced ? 0 : SPIN;
+  const since = (now - modeStart) / 1000;
+  const spun = mode && since >= spin;
+  const mt = since - spin;
+  const tl = !mode ? timeline(t) : spun ? { curve: 1, sweep: 2 * Math.PI } : { curve: 1, sweep: ease(since / spin) * 2 * Math.PI };
+  const v = view(mode ? 0.5 : ph);
+
+  g.drawImage(paper, 0, 0);
+
+  // Paint fronts. Volume: poured volume pi(1 - 1/x) rises evenly, so the front runs off to infinity
+  // while the total stays under pi. Surface: area ~ 2pi ln x, so painting at a steady rate never ends.
+  let front = 0, counter = "";
+  if (spun && mode === "volume") {
+    const f = Math.min(mt / 2.4, 1);
+    front = f >= 1 ? 1e9 : 1 / (1 - f * 0.9995);
+    const poured = Math.PI * (1 - 1 / front);
+    counter = f >= 1 ? "poured: π. it's full!" : `poured: ${poured.toFixed(5)}`;
+  } else if (spun && mode === "surface") {
+    const area = mt * 1.6;
+    front = Math.exp(area / (2 * Math.PI));
+    counter = `painted: ${area.toFixed(1)}... still not done`;
+  }
+
+  // The lines part and the counter (or the hint) pops up between them
+  const midKey = mode ? (spun ? mode : "") : recording ? "" : "hint";
+  const midText = counter || (midKey ? "(tap either line)" : "");
+  if (midKey !== popKey) { popKey = midKey; popStart = now; }
+  const dt = Math.min(0.1, (now - lastNow) / 1000);
+  lastNow = now;
+  gap += ((midKey ? 1 : 0) - gap) * (1 - Math.exp(-dt / 0.12));
+  drawHeader(reduced && !recording ? 1 : (now - loopStart) / 1000, now);
+  if (midText) {
+    const midY = (HEAD[0].y + HEAD[1].y - HEAD_SIZE * 0.72) / 2;
+    const k = reduced ? 1 : popScale((now - popStart) / 380);
+    g.save();
+    g.translate(S / 2, midY);
+    g.scale(k, k);
+    g.textAlign = "center";
+    g.textBaseline = "middle";
+    if (mode === "volume") { g.font = `700 46px ${FONT}`; g.fillStyle = BLUES[0]; }
+    else if (mode === "surface") { g.font = `700 46px ${FONT}`; g.fillStyle = CORALS[0]; }
+    else { g.font = `400 34px ${FONT}`; g.fillStyle = LABEL; }
+    g.fillText(midText, 0, 0);
+    g.restore();
+  }
+
+  buildSurface(v, tl.sweep, spun && mode === "volume");
+  const over = overlays(v, tl);
+
+  g.textAlign = "center";
+  g.textBaseline = "middle";
+  const stream = spun && mode === "surface" ? Math.floor(mt * 9) : 0;
+
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const i = c + r * COLS;
+      const cx = GX + c * CW + CW / 2, cy = GY + r * CH + CH / 2;
+      const o = over.get(i);
+      if (o) {
+        if (!o.ch) continue;
+        g.font = `700 ${o.color === CURVE ? 25 : 20}px ${FONT}`;
+        g.fillStyle = o.color;
+        g.fillText(o.ch, cx, cy);
+        continue;
+      }
+      if (depth[i] < -1e8) continue;
+      const x = wx[i], k = shade[i];
+      const zi = zoneIndex(x), z = ZONES[zi];
+      const painted = x < front || cap[i];
+      let word, color;
+      if (painted && mode === "volume") {
+        word = z.paint;
+        color = BLUES[zi >= 3 ? 1 : k > 0.15 ? 0 : 1];
+      } else if (painted && mode === "surface") {
+        word = z.paint;
+        color = CORALS[k > 0.2 && !inside[i] ? 0 : 1];
+      } else {
+        word = z.horn;
+        let lvl = k > 0.45 ? 0 : k > 0.05 ? 1 : 2;
+        if (inside[i]) lvl = Math.max(lvl, 1) + 1;
+        if (zi === 2) lvl += 1;
+        if (zi === 3) lvl = Math.max(2, lvl);
+        color = BLUES[Math.min(3, lvl)];
+      }
+      const ch = word[(((c - (painted ? stream : 0) + r * 3) % word.length) + word.length) % word.length];
+      if (ch === " ") continue;
+      g.font = `700 19px ${FONT}`;
+      g.fillStyle = color;
+      g.fillText(ch, cx, cy);
+    }
+  }
+
+  // Axis labels, tick numbers hugging the underside of the horn
+  g.textBaseline = "alphabetic";
+  g.fillStyle = LABEL;
+  g.font = `400 24px ${FONT}`;
+  g.textAlign = "center";
+  const [ox, oy] = project(v, 0, 0, 0);
+  g.textAlign = "right";
+  g.fillText("0", ox - 12, oy + 26);
+  const [y1x, y1y] = project(v, 0, 1, 0);
+  g.fillText("1", y1x - 14, y1y + 8);
+  const [ytx, yty] = project(v, 0, 3.05, 0);
+  g.textAlign = "left";
+  g.font = `700 26px ${FONT}`;
+  g.fillText("y", ytx - 34, yty + 24);
+  g.textAlign = "right";
+  g.fillText("x", S - 62, project(v, 6.2, 0, 0)[1] + 36);
+
+  // As x shrinks toward 0, y = 1/x shoots up off the top: a dotted trail up the y-axis
+  if (tl.curve > 0) {
+    g.textBaseline = "middle";
+    g.textAlign = "center";
+    g.fillStyle = CURVE;
+    g.font = `700 28px ${FONT}`;
+    let [px, py] = project(v, 1, 1, 0), arc = 0, dotArc = 0;
+    const reach = 620 * Math.min(1, tl.curve);
+    for (let x = 0.999; x > 0.05; x -= 0.0015) {
+      const [qx, qy] = project(v, x, 1 / x, 0);
+      const step = Math.hypot(qx - px, qy - py);
+      arc += step; dotArc += step;
+      px = qx; py = qy;
+      if (py < 6 || arc > reach) break;
+      if (dotArc > 13) { g.fillText("·", px, py); dotArc = 0; }
+    }
+    g.textBaseline = "alphabetic";
+  }
+
+  if (tl.curve >= 1) {
+    const [lx, ly] = project(v, 1.12, 1.12, 0);
+    g.textAlign = "left";
+    g.fillStyle = CURVE;
+    g.font = `700 30px ${FONT}`;
+    g.fillText("y = 1/x", lx + 10, ly - 6);
+  }
+
+  requestAnimationFrame(frame);
+}
+
+function toCanvas(e) {
+  const b = cv.getBoundingClientRect();
+  return [(e.clientX - b.left) * S / b.width, (e.clientY - b.top) * H / b.height];
+}
+cv.addEventListener("click", e => { const m = hitHeader(...toCanvas(e)); if (m) setMode(m); });
+cv.addEventListener("pointermove", e => { cv.style.cursor = hitHeader(...toCanvas(e)) ? "pointer" : "default"; });
+document.getElementById("btn-volume").onclick = () => setMode("volume");
+document.getElementById("btn-surface").onclick = () => setMode("surface");
+
+// Recording one seamless loop works when the page runs locally (the hosted viewer blocks downloads)
+const local = location.protocol === "file:" || ["localhost", "127.0.0.1"].includes(location.hostname);
+const rec = document.getElementById("btn-record");
+rec.hidden = !local || !window.MediaRecorder;
+rec.onclick = () => {
+  const type = ["video/mp4;codecs=avc1", "video/mp4", "video/webm;codecs=vp9", "video/webm"].find(t => MediaRecorder.isTypeSupported(t));
+  const mr = new MediaRecorder(cv.captureStream(30), { mimeType: type, videoBitsPerSecond: 12e6 });
+  const chunks = [];
+  mr.ondataavailable = e => chunks.push(e.data);
+  mr.onstop = () => {
+    recording = false;
+    rec.textContent = "Record one loop";
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob(chunks, { type }));
+    a.download = "gabriels-horn." + (type.includes("mp4") ? "mp4" : "webm");
+    a.click();
+  };
+  mode = null;
+  recording = true;
+  loopStart = performance.now();
+  rec.textContent = "Recording...";
+  mr.start();
+  setTimeout(() => mr.stop(), LOOP * 1000);
+};
+
+document.fonts.load(`700 84px "Gaegu"`).finally(() => requestAnimationFrame(frame));
+</script>
